@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import logging
+import secrets
 import time
 import uuid
 from collections import defaultdict, deque
@@ -14,14 +15,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .config import settings
 from .database import get_db
 from .models import (AuditLog, BalanceAdjustment, Batch, BatchStatus, Loss, LossReason, Notification, RefreshSession,
                      ReviewStatus, Role, Stage, Transfer, TransferStatus, User, now_utc)
-from .schemas import (AdjustmentCreate, BatchCreate, ChangePasswordInput, LoginInput, LossCreate, ReviewInput,
+from .schemas import (AdminRecoveryInput, AdjustmentCreate, BatchCreate, ChangePasswordInput, LoginInput, LossCreate, ReviewInput,
                       ResetPasswordInput, TransferCreate, TransferReceive, UserCreate, UserPatch, UserView)
 from .security import decode_token, hash_password, make_access_token, make_refresh_token, token_digest, verify_password
 from .services import audit, available_quantity, notify_stage, stage_order, to_dict
@@ -260,6 +261,48 @@ def forgot_password():
 @app.post("/auth/reset-password")
 def reset_password():
     raise HTTPException(501, "PASSWORD_RESET_DELIVERY_NOT_CONFIGURED")
+
+
+@app.post("/auth/admin-recovery")
+def recover_admin(data: AdminRecoveryInput, request: Request, db: Session = Depends(get_db)):
+    """One-time, token-protected recovery for the seeded admin account."""
+    configured_token = settings.admin_recovery_token
+    if not configured_token:
+        raise HTTPException(404, "ADMIN_RECOVERY_DISABLED")
+    if len(configured_token) < 32:
+        raise HTTPException(503, "ADMIN_RECOVERY_TOKEN_TOO_SHORT")
+    enforce_login_rate_limit(request, "admin-recovery")
+    if not secrets.compare_digest(data.token, configured_token):
+        raise HTTPException(401, "ADMIN_RECOVERY_INVALID_TOKEN")
+
+    if db.bind and db.bind.dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(71930421)"))
+    already_used = db.scalar(select(AuditLog.id).where(AuditLog.action == "ADMIN_RECOVERY_COMPLETED").limit(1))
+    if already_used:
+        raise HTTPException(410, "ADMIN_RECOVERY_ALREADY_USED")
+
+    admin = db.scalar(select(User).where(User.username == "admin", User.role == Role.ADMIN))
+    if not admin or not admin.is_active:
+        raise HTTPException(404, "ADMIN_ACCOUNT_NOT_FOUND")
+
+    old_value = {
+        "failed_login_attempts": admin.failed_login_attempts,
+        "locked_until": admin.locked_until.isoformat() if admin.locked_until else None,
+    }
+    admin.password_hash = hash_password(data.new_password)
+    admin.must_change_password = False
+    admin.failed_login_attempts = 0
+    admin.locked_until = None
+    for session in db.scalars(select(RefreshSession).where(
+        RefreshSession.user_id == admin.id, RefreshSession.revoked_at.is_(None)
+    )).all():
+        session.revoked_at = now_utc()
+
+    audit(db, "ADMIN_RECOVERY_COMPLETED", "user", admin.id, None, request=request,
+          old=old_value, new={"password_reset": True, "locked": False},
+          reason="One-time owner-initiated admin recovery")
+    db.commit()
+    return {"success": True, "message": "Пароль admin сброшен. Войдите с новым паролем."}
 
 
 @app.get("/auth/me")

@@ -31,6 +31,18 @@ class ResetPasswordInput(BaseModel):
         return value
 
 
+class AdminRecoveryInput(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
+    new_password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def strong_password(cls, value: str) -> str:
+        if not any(c.islower() for c in value) or not any(c.isupper() for c in value) or not any(c.isdigit() for c in value):
+            raise ValueError("Use upper and lower case letters and at least one number")
+        return value
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
     full_name: str = Field(min_length=2, max_length=160)

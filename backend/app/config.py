@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     refresh_token_days: int = 7
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
     environment: str = "development"
+    admin_recovery_token: str = ""
     loss_approval_threshold: int = 10
     login_max_attempts: int = 5
     login_lock_minutes: int = 15
