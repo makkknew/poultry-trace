@@ -26,7 +26,9 @@ export default async (request: Request): Promise<Response> => {
     })
     const responseHeaders = new Headers()
     upstream.headers.forEach((value, key) => {
-      if (!['connection', 'content-length', 'transfer-encoding'].includes(key.toLowerCase()) && key.toLowerCase() !== 'set-cookie') {
+      // fetch() transparently decompresses upstream bodies. Forwarding the
+      // original encoding header makes the browser try to decompress twice.
+      if (!['connection', 'content-length', 'transfer-encoding', 'content-encoding'].includes(key.toLowerCase()) && key.toLowerCase() !== 'set-cookie') {
         responseHeaders.set(key, value)
       }
     })
