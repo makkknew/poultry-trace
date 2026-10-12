@@ -32,7 +32,10 @@ export default async (request: Request): Promise<Response> => {
     })
     for (const cookie of upstream.headers.getSetCookie?.() ?? []) responseHeaders.append('set-cookie', cookie)
     responseHeaders.set('cache-control', 'no-store')
-    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
+    // Buffer the upstream response before returning it. This keeps Netlify's
+    // function response alive until the browser has consumed the API body.
+    const responseBody = await upstream.arrayBuffer()
+    return new Response(responseBody, { status: upstream.status, headers: responseHeaders })
   } catch {
     return Response.json({ error: { message: 'Не удалось подключиться к API Poultry Trace' } }, { status: 502 })
   }
