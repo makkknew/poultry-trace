@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: poultry_trace
+      POSTGRES_USER: poultry
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - poultry_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poultry -d poultry_trace"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://poultry:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/poultry_trace
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?Set JWT_REFRESH_SECRET in .env}
+      CORS_ORIGINS: http://localhost:${WEB_PORT:-8080}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      SEED_DEMO_PASSWORD: ${SEED_DEMO_PASSWORD:?Set SEED_DEMO_PASSWORD in .env}
+      LOSS_APPROVAL_THRESHOLD: ${LOSS_APPROVAL_THRESHOLD:-10}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - backend
+
+volumes:
+  poultry_data:
